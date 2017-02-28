@@ -1,9 +1,14 @@
 "use strict";
 
-var http = require('htpp');
+var multipart = require('./multipart');
+var template = require('./template');
+var http = require('http');
 var url = require('url');
 var fs = require('fs');
 var port = 12037;
+var stylesheet = fs.readFileSync('public/catalog.css');
+
+template.loadDir("templates");
 
 var catalogServer = http.createServer(handleRequest);
 catalogServer.listen(port, function() {
@@ -15,6 +20,7 @@ function handleRequest(req, res) {
 
 	switch(urlParts.pathname) {
 		//Catalog index page
+		case '':
 		case '/':
 			serveCatalog(req, res);
 			break;
@@ -25,31 +31,51 @@ function handleRequest(req, res) {
 				uploadForm(req, res);
 			}
 			else if(req.method == 'POST') {
-				uploadEntry(req, res);
+				uploadEntry(req, res, serveCatalog);
 			}
 			break;
-		//Favicon
-		case 'favicon.ico':
-			req.writeHead(400);
-			req.end();
-			break;
-		//CSS
 		case '/catalog.css':
-			serveCSS(req, res);
-			break;
-		//Catalog entry page
-		case '':
-			break;
+     		res.setHeader('Content-Type', 'text/css');
+     		res.end(stylesheet);
+     		break;
 		default:
-			serveImage(req, res);
+			if(urlParts.pathname.includes('.jpg') || urlParts.pathname.includes('.png')) {
+				serveImage(req.url, req, res);
+			}
+			else {
+				serveEntry(urlParts.pathname, req, res);
+			}
 			break;
 	}
 }
 
-function buildCatalog(imageTage) {
-	return template.render('catalog', {
-		title: config.title,
-		imageTags: imageNamesToTags(imageTags),join('')
+function serveEntry(urlPath, req, res) {
+	var path = urlPath.substr(1, urlPath.length) + '.json';
+	fs.readFile(path, function(err, data) {
+		if(err) {
+			console.error(err);
+			res.statusCode = 404;
+			res.statusMessage = "Resource not Found";
+			res.end()
+			return;
+		}
+		var entry = JSON.parse(data);
+		res.end(buildEntry(entry));
+	});
+}
+
+function buildEntry(entry)
+{
+	return template.render('catalogEntry.html', {
+		image: imageNamesToTags([entry.image]).join(''),
+		name: entry.name,
+		description: entry.description 
+	});
+}
+
+function buildCatalog(imageTags) {
+	return template.render('catalog.html', {
+		imageTags: imageNamesToTags(imageTags).join('')
 	});
 }
 
@@ -62,7 +88,7 @@ function serveCatalog(req, res) {
 			res.end();
 			return;
 		}
-		res.setHeader('COntent-Type', 'text/html');
+		res.setHeader('Content-Type', 'text/html');
 		res.end(buildCatalog(imageNames));
 	});
 }
@@ -76,20 +102,22 @@ function getImageNames(callback) {
 
 function imageNamesToTags(fileNames) {
 	return fileNames.map(function(fileName) {
-		return '<img src="${fileName}" alt="${fileName}">';
+		var anchor = fileName.replace(/\.[^/.]+$/,"");
+		return `<a href="${anchor}"><img src="${fileName}" alt="${fileName}"></a>`;
 	});
 }
 
+
 function serveImage(fileName, req, res) {
-	fs.readFile('images/' + decodeURIComponent(fileName), function(err, data) {
+	fs.readFile('images' + decodeURIComponent(fileName), function(err, data) {
 		if(err) {
 			console.error(err);
-			res.statusCode = 500;
+			res.statusCode = 404;
 			res.statusMessage = "Resource not Found";
 			res.end()
 			return;
 		}
-		res.setHeader("Content-Type", "image/jpeg");
+		res.setHeader('Content-Type', 'image/*');
 		res.end(data);
 	});
 }
@@ -114,4 +142,38 @@ function uploadImage(req, res) {
 			serveCatalog(req, res);
 		});
 	});
+}
+
+function uploadEntry(req, res) {
+	multipart(req, res, function(req, res) {
+		if(!req.body.image.filename || !req.body.entryName || !req.body.entryDescription) {
+			console.error("Information Missing");
+			res.statusCode = 400;
+			res.statusMessage = "Information Missing";
+			res.end("Information Missing");
+			return;
+		}
+		var data = {entryName: req.body.entryName, entryDescription: req.body.entryDescription, entryImage: req.body.entryImage}
+		fs.writeFile('entries/' + entryName + '.json', data, function(err) {
+			console.error(err)
+			res.statusCode = 500;
+			res.statusMessage = "Server Error";
+			res.end("Server Error");
+			return;
+		});
+		fs.writeFile('images/' + entryName, req.body.image.data, function(err) {
+			if(err) {
+				console.error(err)
+				res.statusCode = 500;
+				res.statusMessage = "Server Error";
+				res.end("Server Error");
+				return;
+			}
+			serveCatalog(req, res);
+		});
+	});
+}
+
+function uploadForm(req, res) {
+	res.end(template.render('catalogEntryUpload.html'));
 }
